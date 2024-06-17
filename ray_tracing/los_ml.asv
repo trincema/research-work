@@ -1,0 +1,164 @@
+% Variables
+f = 2.6e9;
+antHeight = 25; % [m]
+power = 10; % [w]
+numCellSites = 7; % 7, 19
+isd = 1500; % Inter-site distance [m]
+
+buildings = readgeotable("manhattan.osm",Layer="buildingparts");
+uniqueMaterials = unique(buildings.Material);
+materials = ["","brick","concrete","copper","glass","metal","plaster","stone"]; 
+colors = ["#D3D3D3","#AA4A44","#D3D3D3","#B87333","#35707E","#151513","#FFFFFF","#301934"];
+dict = dictionary(materials,colors);
+numBuildings = height(buildings);
+for n = 1:numBuildings
+    material = buildings.Material(n);
+    buildings.Color(n) = dict(material);
+end
+% Deschide fereastra SiteViewer cu definire Basemap si Buildings
+viewer = siteviewer("Basemap", "openstreetmap", "Buildings", buildings);
+% viewer = siteviewer("Basemap", "openstreetmap");
+
+% Central point (latitude, longitude)
+center_lat = 40.708619; % New York City latitude
+center_long = -74.010000; % New York City longitude
+
+% 1. Creare Statie de Baza Emitator
+% Pozitionati antena transmitatoare pe o cladire la alegere.
+tx = txsite("Name", "Tx", ...
+    "Latitude", center_lat, ...
+    "Longitude", center_long, ...
+    "Antenna", design(dipole, f), ...
+    "TransmitterFrequency", f);
+% Afisare statie Tx in SiteViewer
+tx.AntennaHeight = 25;
+show(tx);
+pattern(tx);
+
+rxArrayHandler = RxArrayHandler;
+
+radiusStep = 100;
+
+cellRadius = 300;
+rxArraySize = 6;
+rxs = generateCircularRxArray(center_lat, center_long, cellRadius, rxArraySize, 250, f);
+% rxs = generateLocationsBetweenPoints(center_lat, center_long, 200, 10, 50);
+
+for i = 1:length(rxs)
+    % pattern(rxs(i), f, "Transparency", 0.6, "Size", 10);
+    % pause(5);
+end
+
+pm = propagationModel("raytracing", Method="image");
+pm.Method = "sbr";
+pm.MaxNumReflections = 1;
+pm.MaxNumDiffractions = 1;
+%raytrace(tx, rx(1), pm);
+
+% Heavy rain: 10 - 50 mm/h
+pm2 = pm + propagationModel("rain", "RainRate", 50);
+data = [];
+axesLabels = zeros(1, rxArraySize);
+plotData = zeros(1, rxArraySize);
+for i = 1:length(rxs)
+    % Analyze Signal Strength and Effect of Materials
+    raytrace(tx, rxs(i), pm);
+    ss1 = sigstrength(rxs(i), tx, pm);
+    ss2 = sigstrength(rxs(i), tx, pm2);
+    l = los(tx, rxs(i));
+    disp("Rx(" + i + "): RT: " + ss1 + " RTR: " + ss2 + " LOS: " + l);
+    data = [data; [("Rx" + i) ss1 ss2 l]];
+    axesLabels(i) = "Rx" + i;
+    plotData(i) = ss1;
+end
+writematrix(data, "circular_" + cellRadius + ".csv");
+disp(data);
+disp(axesLabels);
+disp(plotData);
+
+for i = 1:length(a)
+    if a(i) == -Inf
+        a(i) = -100;
+    end
+end
+
+% Initialize data points
+D1 = [5 3 9 1 2 1];
+D2 = [5 8 7 2 9 1];
+D3 = [8 2 1 4 6 1];
+P = [plotData];
+
+% Spider plot
+spider_plot(P,...
+    'AxesLabels', axesLabels,...
+    'AxesInterval', 2,...
+    'FillOption', {'on', 'on', 'off'},...
+    'FillTransparency', [0.2, 0.1, 0.1]);
+
+function rxSites = generateCircularRxArray(baseLat, baseLon, ...
+        cellRadius, rxCount, maxAltitude, f)
+    distUnits = 'm';
+    arclen = rad2deg(cellRadius/earthRadius(distUnits));
+    rxSites = rxsite.empty(length(rxCount), 0);
+    
+    % Calculate the new points
+    for i = 1:rxCount
+        % Calculate the Rx coordinate
+        azimuth = i * (360 / rxCount);
+        disp("azimuth: " + azimuth);
+        [rx_lat, rx_lon] = reckon(baseLat, baseLon, arclen, azimuth);
+        % Create Rx site
+        rx = rxsite("Name", "Rx" + i, ...
+            "Latitude", rx_lat, ...
+            "Longitude", rx_lon, ...
+            "Antenna", design(dipole, f), ...
+            "ReceiverSensitivity", -90); % Units: dBm
+        disp("Rx" + i + ": " + "lat: " + rx_lat + ", lon: " + rx_lon + ...
+            ", azimuth: "+ azimuth + " [deg], elevation: " + elevation(rx));
+        rxSites(i) = rx;
+        if (maxAltitude == -1) || (elevation(rx) <= maxAltitude)
+            show(rx);
+            while ~isvalid(rx)
+                pause(0.1);
+            end
+        end
+    end
+end
+
+function rxSitesHex = generateLocationsBetweenPoints(centerLat, centerLong, ...
+    radius, num_points, maxAltitude)
+    rxs = generateCircularRxArray(centerLat, centerLong, radius, 6, -1);
+    for rxi = 1:length(rxs)
+        rx1 = rxs(rxi);
+        rx2 = rxs(1);
+        if rxi < 6
+            rx2 = rxs(rxi + 1);
+        end
+        lat1 = rx1.Latitude;
+        lon1 = rx1.Longitude;
+        lat2 = rx2.Latitude;
+        lon2 = rx2.Longitude;
+
+        % Calculate step size for interpolation
+        step_lat = (lat2 - lat1) / (num_points - 1);
+        step_lon = (lon2 - lon1) / (num_points - 1);
+    
+        % Generate locations between the two points
+        for i = 2:num_points-1
+            % Interpolate latitude and longitude
+            lat = lat1 + (i - 1) * step_lat;
+            lon = lon1 + (i - 1) * step_lon;
+            
+            rx = rxsite("Name", "Rx" + rxi + "" + i, ...
+                "Latitude", lat, ...
+                "Longitude", lon, ...
+                "ReceiverSensitivity", -90); % Units: dBm
+            if (elevation(rx) <= maxAltitude)
+                show(rx);
+                while ~isvalid(rx)
+                    pause(0.1); % Pause for 1 second
+                end
+            end
+        end
+    end
+end
